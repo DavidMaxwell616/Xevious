@@ -31,6 +31,7 @@ export class SplashScene extends Phaser.Scene {
             .setTint(0xcfe8ff)
             .setOrigin(0.5);
 
+        //        try { this.sound.play("s_credit", { volume: 0.55 }); } catch { /* audio unavailable */ }
         const begin = () => this.beginGame();
         this.input.keyboard.once("keydown-SPACE", begin);
         this.input.keyboard.once("keydown-ENTER", begin);
@@ -50,7 +51,6 @@ export class SplashScene extends Phaser.Scene {
     beginGame() {
         if (this.starting) return;
         this.starting = true;
-        try { this.sound.play("s_credit", { volume: 0.55 }); } catch { /* audio unavailable */ }
         this.input.keyboard.removeAllListeners();
         this.input.removeAllListeners();
         this.cameras.main.fadeOut(350, 0, 0, 0);

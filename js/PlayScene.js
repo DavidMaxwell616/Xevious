@@ -1,10 +1,16 @@
+import { GROUND_MAP } from "./GroundMap.js";
+
 const W = 480;
 const H = 600;
+const BULLET_SPEED = 590;
 const TERRAIN_W = 256;
 const TERRAIN_H = 2900;
+const TERRAIN_SCALE = 2;
+const TERRAIN_SEGMENT_HEIGHT = TERRAIN_H * TERRAIN_SCALE;
+const TERRAIN_KEYS = ["terrain", "terrain2", "terrain3", "terrain4"];
+const TOTAL_TERRAIN_TRAVEL = TERRAIN_KEYS.length * TERRAIN_SEGMENT_HEIGHT - H;
 function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
 function lerp(a, b, t) { return a + (b - a) * t; }
-function wrap(v, size) { return ((v % size) + size) % size; }
 
 export class PlayScene extends Phaser.Scene {
     constructor() { super("Play"); }
@@ -22,7 +28,6 @@ export class PlayScene extends Phaser.Scene {
         });
 
         this.sfx = {
-            credit: this.safeAddSound("s_credit", 0.4),
             zapper1: this.safeAddSound("s_zapper1", 0.42),
             zapper2: this.safeAddSound("s_zapper2", 0.42),
             blaster1: this.safeAddSound("s_blaster1", 0.5),
@@ -59,7 +64,10 @@ export class PlayScene extends Phaser.Scene {
         // progression
         this.scrollSpeed = 60;
         this.distance = 0;
+        this.terrainTravel = 0;
+        this.groundScrollDelta = 0;
         this.nextScriptIndex = 0;
+        this.nextGroundIndex = 0;
         this.stageScript = makeStageScript();
 
         // stats
@@ -76,14 +84,16 @@ export class PlayScene extends Phaser.Scene {
         this.playerInvuln = 0;
         this.shotCooldown = 0;
         this.bombCooldown = 0;
+        this.bombKeyWasDown = false;
+        this.activeBomb = null;
         this.radarCooldown = 0;
 
         // backgrounds
-        this.starsA = this.add.tileSprite(0, 0, W, H, "starsA").setOrigin(0, 0).setAlpha(0.60).setScale(2);
-        this.starsB = this.add.tileSprite(0, 0, W, H, "starsB").setOrigin(0, 0).setAlpha(0.45).setScale(2);
-        this.terrain = this.add.tileSprite(0, 0, W, H, "terrain").setOrigin(0, 0).setTileScale(2);
-        // Begin over the mapped road/field section instead of the long forest border.
-        this.terrain.tilePositionY = 900;
+        this.terrainSegments = TERRAIN_KEYS.map((key, index) => this.add.image(
+            W / 2,
+            H - TERRAIN_SEGMENT_HEIGHT - index * TERRAIN_SEGMENT_HEIGHT,
+            key
+        ).setOrigin(0.5, 0).setScale(TERRAIN_SCALE).setDepth(0));
 
         // groups
         this.playerShots = this.physics.add.group({ classType: Phaser.Physics.Arcade.Image, maxSize: 160 });
@@ -92,10 +102,10 @@ export class PlayScene extends Phaser.Scene {
         this.groundTargets = this.physics.add.group({ classType: Phaser.Physics.Arcade.Sprite, maxSize: 120 });
         this.enemyBullets = this.physics.add.group({ classType: Phaser.Physics.Arcade.Image, maxSize: 260 });
         this.powerups = this.physics.add.group({ classType: Phaser.Physics.Arcade.Sprite, maxSize: 30 });
-        this.craters = this.add.group({ classType: Phaser.GameObjects.Image, maxSize: 120 });
+        this.craters = this.add.group({ classType: Phaser.GameObjects.Sprite, maxSize: 120 });
 
         // player
-        this.player = this.physics.add.sprite(W / 2, H * 0.78, "player", "player").setDepth(50).setScale(2);
+        this.player = this.physics.add.sprite(W / 2, H * 0.78, "player").setDepth(50);
         this.player.setDamping(true).setDrag(0.0008).setMaxVelocity(270, 270);
         this.player.setCollideWorldBounds(true);
         this.bombTarget = this.add.image(this.player.x, this.player.y - 200, "target")
@@ -117,7 +127,6 @@ export class PlayScene extends Phaser.Scene {
 
         // collisions
         this.physics.add.overlap(this.playerShots, this.airEnemies, this.onShotHitsAir, null, this);
-        this.physics.add.overlap(this.bombs, this.groundTargets, this.onBombTouchesGround, null, this);
 
         this.physics.add.overlap(this.player, this.airEnemies, this.onPlayerHit, null, this);
         this.physics.add.overlap(this.player, this.enemyBullets, this.onPlayerHitByBullet, null, this);
@@ -153,15 +162,14 @@ export class PlayScene extends Phaser.Scene {
             if (Phaser.Input.Keyboard.JustDown(this.keys.restart)) this.scene.restart();
             return;
         }
-        // scroll + distance
-        this.distance += (this.scrollSpeed * dt) * 0.06;
+        // Scroll from the bottom of Terrain 1 through Terrain 4 exactly once.
+        const remainingTerrain = Math.max(0, TOTAL_TERRAIN_TRAVEL - this.terrainTravel);
+        this.groundScrollDelta = this.bossActive ? 0 : Math.min(this.scrollSpeed * dt, remainingTerrain);
+        this.terrainTravel += this.groundScrollDelta;
+        this.distance += this.groundScrollDelta * 0.06;
 
         // background scroll (correct direction)
-        this.starsA.tilePositionY -= this.scrollSpeed * dt * 0.15;
-        this.starsB.tilePositionY -= this.scrollSpeed * dt * 0.30;
-        // Tile coordinates are source pixels. At 2x tile scale, half the
-        // screen-space scroll keeps map objects locked to their terrain pixel.
-        this.terrain.tilePositionY -= this.scrollSpeed * dt * 0.5;
+        this.terrainSegments.forEach((segment) => { segment.y += this.groundScrollDelta; });
 
         // difficulty ramp
         const targetSpeed = clamp(170 + this.distance * 0.10 + this.score / 1800, 170, 270);
@@ -200,10 +208,12 @@ export class PlayScene extends Phaser.Scene {
         }
 
         // bomb
-        if (this.player.visible && Phaser.Input.Keyboard.JustDown(this.keys.bomb) && this.bombCooldown <= 0) {
+        const bombKeyDown = this.keys.bomb.isDown;
+        if (this.player.visible && bombKeyDown && !this.bombKeyWasDown && this.bombCooldown <= 0) {
             this.dropBomb();
             this.bombCooldown = 0.58;
         }
+        this.bombKeyWasDown = bombKeyDown;
 
         // radar
         if (Phaser.Input.Keyboard.JustDown(this.keys.radar) && this.radarCooldown <= 0 && this.radarCharges > 0) {
@@ -218,13 +228,16 @@ export class PlayScene extends Phaser.Scene {
         // update entities
         this.updateAirEnemies(dt);
         this.updateGroundTargets(dt);
+        this.spawnMappedGroundTargets();
+        this.updateBombTargetLock();
         this.updateBoss(dt);
 
         // cleanup
         this.cleanupGroup(this.playerShots, -80, H + 80);
         this.cleanupGroup(this.enemyBullets, -120, H + 120);
-        this.cleanupGroup(this.airEnemies, -160, H + 160);
-        this.cleanupGroup(this.groundTargets, -160, H + 160);
+        this.cleanupGroup(this.airEnemies, -1600, H + 160);
+        // Ground units may be pre-positioned well ahead in the stitched map.
+        this.cleanupGroup(this.groundTargets, -1600, H + 160);
         this.cleanupGroup(this.bombs, -120, H + 120);
         this.cleanupGroup(this.powerups, -160, H + 160);
         this.cleanupGroup(this.craters, -80, H + 80);
@@ -243,7 +256,7 @@ export class PlayScene extends Phaser.Scene {
 
     // ---------- stage script ----------
     runStageScript() {
-        if (!this.bossActive && this.distance >= 900) {
+        if (!this.bossActive && this.terrainTravel >= TOTAL_TERRAIN_TRAVEL) {
             this.spawnBoss();
             this.bossActive = true;
         }
@@ -254,10 +267,10 @@ export class PlayScene extends Phaser.Scene {
             const ev = this.stageScript[this.nextScriptIndex];
             if (ev.type === "airWave") {
                 const bonus = Math.min(2, Math.floor(this.score / 12000));
-                this.spawnAirWave(ev.pattern, clamp(ev.count + bonus, 2, 5));
+                const count = ev.pattern === "blockade" ? 12 : Math.max(5, ev.count + bonus);
+                this.spawnAirWave(ev.pattern, count);
                 this.waveNumber++;
             }
-            if (ev.type === "groundRow") this.spawnGroundRow(ev.count, ev.hiddenChance);
             if (ev.type === "powerup") this.spawnPowerup();
             if (ev.type === "radarCharge") this.radarCharges = Math.min(5, this.radarCharges + (ev.amount || 1));
             this.nextScriptIndex++;
@@ -268,7 +281,7 @@ export class PlayScene extends Phaser.Scene {
     fireShot() {
         const px = this.player.x, py = this.player.y - 18;
         const configs = [
-            [{ dx: 0, dy: -590 }],
+            [{ dx: 0, dy: -BULLET_SPEED }],
             [{ dx: -80, dy: -570 }, { dx: 80, dy: -570 }],
             [{ dx: 0, dy: -610 }, { dx: -120, dy: -560 }, { dx: 120, dy: -560 }]
         ];
@@ -280,7 +293,8 @@ export class PlayScene extends Phaser.Scene {
             b.setActive(true).setVisible(true);
             b.body.enable = true;
             b.setDepth(120);
-            b.setScale(1.35);
+            b.setScale(2);
+            b.body.setSize(b.width * 2, b.height * 2, true);
             b.setVelocity(s.dx, s.dy);
             b.setData("damage", 1);
         }
@@ -289,20 +303,24 @@ export class PlayScene extends Phaser.Scene {
     }
 
     dropBomb() {
+        if (this.activeBomb?.active) return;
         const b = this.bombs.get(this.player.x, this.player.y - 10, "bomb");
         if (!b) return;
 
+        this.activeBomb = b;
         b.setActive(true).setVisible(true);
         b.body.enable = true;
         b.setDepth(110);
         b.setVelocity(0, 0);
         b.setData("ttl", 0.42);
         b.setData("life", 0);
+        b.setData("detonated", false);
         b.setData("startX", this.player.x);
         b.setData("startY", this.player.y - 10);
         b.setData("targetX", this.bombTarget.x);
         b.setData("targetY", this.bombTarget.y);
-        b.setScale(1.0);
+        b.setScale(2);
+        b.body.setSize(b.width * 2, b.height * 2, true);
 
         this.blasterSoundIndex ^= 1;
         this.safePlay(this.blasterSoundIndex ? "blaster1" : "blaster2");
@@ -329,6 +347,17 @@ export class PlayScene extends Phaser.Scene {
 
     }
 
+    detonateBomb(bomb) {
+        if (!bomb?.active || bomb.getData("detonated")) return;
+        bomb.setData("detonated", true);
+        const x = bomb.x;
+        const y = bomb.y;
+        bomb.setActive(false).setVisible(false);
+        bomb.body.enable = false;
+        if (this.activeBomb === bomb) this.activeBomb = null;
+        this.explodeBomb(x, y, this.bombRadius);
+    }
+
     doRadarSweep() {
         this.radarSweep.setVisible(true);
         this.radarSweep.setPosition(W / 2, H + H / 2);
@@ -352,6 +381,18 @@ export class PlayScene extends Phaser.Scene {
         });
     }
 
+    updateBombTargetLock() {
+        let locked = false;
+        this.groundTargets.children.iterate((ground) => {
+            if (locked || !ground?.active || !ground.visible) return;
+            if (ground.getBounds().contains(this.bombTarget.x, this.bombTarget.y)) locked = true;
+        });
+
+        if (locked) this.bombTarget.setTintFill(0xff0000);
+        else this.bombTarget.clearTint();
+        this.bombTarget.setData("locked", locked);
+    }
+
     // ---------- spawning ----------
     spawnAirWave(pattern = "zig", count = 3) {
         const kindForPattern = {
@@ -366,12 +407,46 @@ export class PlayScene extends Phaser.Scene {
             terraziStrike: "terrazi"
         };
         const kind = kindForPattern[pattern] || "toroid";
-        const center = 90 + this.rng.frac() * (W - 180);
+        if (kind === "toroid") count = Math.max(5, count);
+        count *= 2;
+
+        if (kind === "toroid") {
+            const startLeft = this.rng.frac() < 0.5;
+            const startX = startLeft ? 58 : W - 58;
+            const chain = { leader: null, path: [], lastX: startX, lastY: -50 };
+            for (let p = 0; p < 90; p++) chain.path.push({ x: startX, y: -50 - p * 8 });
+
+            for (let i = 0; i < count; i++) {
+                const e = this.spawnAirEnemy("toroid", startX, -50 - i * 56, pattern);
+                if (!e) continue;
+                e.setData("chain", chain);
+                e.setData("chainIndex", i);
+                e.setData("sweepDir", startLeft ? 1 : -1);
+                if (i === 0) chain.leader = e;
+            }
+            return;
+        }
+
+        if (kind === "bacura") {
+            const lanes = [48, 112, 176, 240, 304, 368, 432];
+            const boardsPerRow = 6;
+            const rows = 4;
+            for (let row = 0; row < rows; row++) {
+                const available = [...lanes];
+                Phaser.Utils.Array.Shuffle(available);
+                const selected = available.slice(0, boardsPerRow).sort((a, b) => a - b);
+                for (const lane of selected) {
+                    const x = clamp(lane + this.rng.between(-10, 10), 38, W - 38);
+                    const y = -50 - row * 105 + this.rng.between(-12, 12);
+                    this.spawnAirEnemy("bacura", x, y, "blockade");
+                }
+            }
+            return;
+        }
 
         for (let i = 0; i < count; i++) {
-            const formationX = center + (i - (count - 1) / 2) * 34;
-            const x = pattern === "formation" ? formationX : 55 + this.rng.frac() * (W - 110);
-            const spacing = kind === "bacura" ? 92 : 42;
+            const x = 55 + this.rng.frac() * (W - 110);
+            const spacing = 42;
             const y = kind === "zakato" ? 72 + i * 52 : -50 - i * spacing;
             this.spawnAirEnemy(kind, x, y, pattern);
         }
@@ -406,6 +481,12 @@ export class PlayScene extends Phaser.Scene {
         e.setData("pattern", pattern);
         e.setData("t", 0);
         e.setData("fired", false);
+        e.setData("retreatFired", false);
+        e.setData("enteredPlayfield", false);
+        const retreatTimes = { toroid: 6.5, torkan: 1.35, kapi: 3.1, jara: 3.8, terrazi: 2.35 };
+        e.setData("retreatAt", retreatTimes[kind] ? retreatTimes[kind] * (0.9 + this.rng.frac() * 0.2) : null);
+        e.setData("chain", null);
+        e.setData("chainIndex", 0);
         e.setData("sweepDir", x < W / 2 ? 1 : -1);
         e.setData("sweepTurns", 0);
 
@@ -415,7 +496,7 @@ export class PlayScene extends Phaser.Scene {
         const fireBase = { toroid: 99, torkan: 0.7, zoshi: 1.0, zakato: 0.18, bacura: 99, kapi: 0.35, jara: 0.55, terrazi: 0.18 };
         e.setData("fireCD", (fireBase[kind] ?? 0.9) + this.rng.frac() * 0.8);
 
-        const scaleMap = { toroid: 1.0, torkan: 1.08, zoshi: 1.12, zakato: 1.35, bacura: 1.0, kapi: 1.0, jara: 1.05, terrazi: 1.0 };
+        const scaleMap = { toroid: 1.0, torkan: 1.08, zoshi: 1.12, zakato: 1.35, bacura: 1.0, kapi: 1.0, jara: 1.0, terrazi: 1.0 };
         e.setScale(scaleMap[kind] ?? 1.0);
         e.setRotation(0);
         const animMap = {
@@ -429,82 +510,75 @@ export class PlayScene extends Phaser.Scene {
         };
         if (animMap[kind]) e.anims.play(animMap[kind], true);
         if (kind === "zakato") e.setAlpha(0);
+        return e;
     }
 
-    spawnGroundRow(count = 2, hiddenChance = 0.25) {
-        const choices = [
-            { kind: "logram", tex: "logram", hp: 2 },
-            { kind: "zolba", tex: "zolba", hp: 2 },
-            { kind: "barra", tex: "barra", hp: 1 },
-            { kind: "derota", tex: "derota", hp: 3 },
-            { kind: "garuDerota", tex: "garuDerota", hp: 6 },
-            { kind: "sol", tex: "sol", hp: 4 },
-            { kind: "grabda", tex: "grabda", hp: 2 },
-        ];
-        const scales = { barra: 1.25, derota: 1.3, garuDerota: 0.9, sol: 0.75, grabda: 3.1 };
-        const footprints = { barra: 18, derota: 20, garuDerota: 34, sol: 34, logram: 20, zolba: 20, grabda: 28 };
-
-        for (let i = 0; i < count; i++) {
-            const pick = choices[this.rng.between(0, choices.length - 1)];
-            const y = -32 - i * 48;
-            const x = pick.kind === "grabda"
-                ? this.findRoadGroundX(y, footprints.grabda)
-                : this.findSafeGroundX(y, footprints[pick.kind] || 20);
-            if (x === null) continue;
-            const g = this.groundTargets.get(x, y, pick.tex);
-            if (!g) continue;
-
-            g.anims.stop();
-            g.setTexture(pick.tex);
-            g.setActive(true).setVisible(true);
-            g.body.enable = true;
-            g.body.setSize(g.width, g.height, true);
-            g.setVelocity(0, 0);
-            g.setFlipX(false);
-            g.setDepth(90);
-
-            g.setData("kind", pick.kind);
-            g.setData("hp", pick.hp);
-            g.setData("fireCD", 0.7 + this.rng.frac() * 1.3);
-            g.setData("moveDir", this.rng.frac() < 0.5 ? -1 : 1);
-
-            // Ground targets must remain readable against the detailed map.
-            g.setData("hidden", false);
-            g.setAlpha(1.0);
-
-            g.setScale(scales[pick.kind] || 1.25);
-            if (pick.kind === "logram") g.anims.play("logram_idle", true);
-            else if (pick.kind === "zolba") g.anims.play("zolba_idle", true);
-            else if (pick.kind === "derota") g.anims.play("derota_idle", true);
-            else if (pick.kind === "garuDerota") g.anims.play("garu_derota_idle", true);
-            else if (pick.kind === "sol") g.anims.play("sol_rise", true);
-            else if (pick.kind === "grabda") g.anims.play("grabda_tread", true);
+    spawnMappedGroundTargets() {
+        while (this.nextGroundIndex < GROUND_MAP.length) {
+            const site = GROUND_MAP[this.nextGroundIndex];
+            const x = W / 2 - TERRAIN_W * TERRAIN_SCALE / 2 + site.x * TERRAIN_SCALE;
+            const y = this.terrainSegments[site.segment].y + site.y * TERRAIN_SCALE;
+            if (y < -80) break;
+            if (y > H + 80) {
+                this.nextGroundIndex++;
+                continue;
+            }
+            if (!this.spawnGroundTarget(site.kind, x, y, site)) break;
+            this.nextGroundIndex++;
         }
     }
 
-    findSafeGroundX(screenY, footprintRadius) {
-        const candidates = [48, 84, 122, 160, 198, 236, 274, 312, 350, 388, 426];
-        Phaser.Utils.Array.Shuffle(candidates);
-        for (const x of candidates) {
-            if (this.isSafeGroundSite(x, screenY, footprintRadius)) return x;
+    spawnGroundTarget(kind, x, y, site) {
+        const hp = { logram: 2, zolba: 2, barra: 1, derota: 3, grabda: 2 };
+        const g = this.groundTargets.get(x, y, kind);
+        if (!g) return false;
+        g.anims.stop();
+        g.setTexture(kind).setActive(true).setVisible(true);
+        g.setScale(kind === "grabda" ? 2 : 1.2);
+        g.body.enable = true;
+        g.body.setSize(g.width, g.height, true);
+        g.setVelocity(0, 0).setFlipX(false).setDepth(90).setAlpha(1);
+        g.setData("kind", kind);
+        g.setRotation(0);
+        g.setData("roadSite", site);
+        if (kind === "grabda") {
+            // Start at the nearest point along the route, including straight spans.
+            let closest = { distance: Infinity, index: 0, x: site.x, y: site.y };
+            for (let i = 0; i < site.path.length - 1; i++) {
+                const [ax, ay] = site.path[i], [bx, by] = site.path[i + 1];
+                const dx = bx - ax, dy = by - ay;
+                const t = clamp(((site.x - ax) * dx + (site.y - ay) * dy) / (dx * dx + dy * dy), 0, 1);
+                const px = ax + dx * t, py = ay + dy * t;
+                const distance = Math.hypot(site.x - px, site.y - py);
+                if (distance < closest.distance) closest = { distance, index: i + 1, x: px, y: py };
+            }
+            g.setData("roadPosition", { x: closest.x, y: closest.y });
+            g.setData("roadIndex", closest.index);
+            g.setData("roadDirection", 1);
         }
-        return null;
-    }
-
-    findRoadGroundX(screenY, footprintRadius) {
-        const candidates = [32, 48, 64, 80, 96, 112, 128, 144, 160, 176, 192,
-            208, 224, 240, 256, 272, 288, 304, 320, 336, 352, 368, 384, 400, 416, 432, 448];
-        Phaser.Utils.Array.Shuffle(candidates);
-        for (const x of candidates) {
-            if (this.isRoadSite(x, screenY, footprintRadius)) return x;
-        }
-        return null;
+        g.setData("hp", hp[kind]);
+        g.setData("destroyed", false);
+        g.setData("hidden", false);
+        g.setData("fireCD", 0.7 + this.rng.frac() * 1.3);
+        g.setData("moveDir", this.rng.frac() < 0.5 ? -1 : 1);
+        const animations = { logram: "logram_idle", zolba: "zolba_idle", derota: "derota_idle", grabda: "grabda_tread" };
+        g.setData("canFire", Boolean(animations[kind]));
+        if (animations[kind]) g.anims.play(animations[kind], true);
+        return true;
     }
 
     terrainColorAt(screenX, screenY) {
-        const mapX = Math.floor(wrap(screenX * 0.5, TERRAIN_W));
-        const mapY = Math.floor(wrap(this.terrain.tilePositionY + screenY * 0.5, TERRAIN_H));
-        return this.textures.getPixel(mapX, mapY, "terrain");
+        const displayLeft = W / 2 - TERRAIN_W * TERRAIN_SCALE / 2;
+        const mapX = Math.floor((screenX - displayLeft) / TERRAIN_SCALE);
+        if (mapX < 0 || mapX >= TERRAIN_W) return null;
+
+        for (let i = 0; i < this.terrainSegments.length; i++) {
+            const segment = this.terrainSegments[i];
+            if (screenY < segment.y || screenY >= segment.y + TERRAIN_SEGMENT_HEIGHT) continue;
+            const mapY = Math.floor((screenY - segment.y) / TERRAIN_SCALE);
+            return this.textures.getPixel(mapX, mapY, TERRAIN_KEYS[i]);
+        }
+        return null;
     }
 
     isRoadSite(screenX, screenY, footprintRadius = 12) {
@@ -521,28 +595,27 @@ export class PlayScene extends Phaser.Scene {
         return true;
     }
 
-    isSafeGroundSite(screenX, screenY, footprintRadius) {
+    isClearingSite(screenX, screenY, footprintRadius) {
         const radius = footprintRadius * 0.5;
         const offsets = [-radius, -radius * 0.5, 0, radius * 0.5, radius];
-        let safeSamples = 0;
+        let clearingSamples = 0;
         let totalSamples = 0;
 
         for (const ox of offsets) {
             for (const oy of offsets) {
-                const mapX = Math.floor(wrap((screenX + ox) * 0.5, TERRAIN_W));
-                const mapY = Math.floor(wrap(this.terrain.tilePositionY + (screenY + oy) * 0.5, TERRAIN_H));
-                const color = this.textures.getPixel(mapX, mapY, "terrain");
+                const color = this.terrainColorAt(screenX + ox, screenY + oy);
                 if (!color) return false;
 
-                // Rivers are blue; forest and tree details are darker green.
+                // Rivers are blue, roads are tan, and forest/trees are dark.
                 if (color.b > color.g || color.b > 120) return false;
-                if (color.g >= 120 && color.r >= 50 && color.b < 100) safeSamples++;
+                const isBrightClearing = color.g >= 120 && color.g - color.r >= 42 && color.b < 85;
+                if (isBrightClearing) clearingSamples++;
                 totalSamples++;
             }
         }
 
-        // Permit sparse grass/road texture dots but reject forest boundaries.
-        return safeSamples / totalSamples >= 0.88;
+        // Allow one small grass texture fleck, but never a tree line or road.
+        return clearingSamples / totalSamples >= 0.96;
     }
 
     spawnPowerup() {
@@ -563,13 +636,50 @@ export class PlayScene extends Phaser.Scene {
         this.airEnemies.children.iterate((e) => {
             if (!e || !e.active) return;
 
-            const t = (e.getData("t") || 0) + dt;
-            e.setData("t", t);
-
             const kind = e.getData("kind");
+            const retreatAt = e.getData("retreatAt");
+            if (e.y >= 0) e.setData("enteredPlayfield", true);
+            const t = (e.getData("t") || 0) + (!retreatAt || e.getData("enteredPlayfield") ? dt : 0);
+            e.setData("t", t);
             e.body.velocity.y = baseDown;
 
+            if (kind !== "toroid" && retreatAt && t >= retreatAt) {
+                this.fireBeforeRetreat(e);
+                const chain = e.getData("chain");
+                if (chain?.leader === e) chain.leader = null;
+                e.setData("chain", null);
+                const speeds = { toroid: 205, torkan: 260, kapi: 235, jara: 210, terrazi: 305 };
+                e.body.velocity.x = (e.getData("sweepDir") || 1) * 80;
+                e.body.velocity.y = -speeds[kind] * difficulty;
+                e.setRotation(clamp(e.body.velocity.x / 300, -1, 1) * 0.18);
+                return;
+            }
+
             if (kind === "toroid") {
+                const chain = e.getData("chain");
+                if (chain && (!chain.leader || !chain.leader.active)) {
+                    chain.leader = e;
+                    e.setData("chainIndex", 0);
+                    chain.lastX = e.x;
+                    chain.lastY = e.y;
+                }
+
+                if (chain && chain.leader !== e) {
+                    if (chain.leader.getData("retreatFired")) this.fireBeforeRetreat(e);
+                    const trailIndex = Math.min(
+                        chain.path.length - 1,
+                        Math.max(1, (e.getData("chainIndex") || 1) * 7)
+                    );
+                    const target = chain.path[trailIndex];
+                    const angle = Phaser.Math.Angle.Between(e.x, e.y, target.x, target.y);
+                    const distance = Phaser.Math.Distance.Between(e.x, e.y, target.x, target.y);
+                    const speed = clamp(distance * 5.5, 90, 250 * difficulty);
+                    e.body.velocity.x = Math.cos(angle) * speed;
+                    e.body.velocity.y = Math.sin(angle) * speed;
+                    e.setRotation(clamp(e.body.velocity.x / 300, -1, 1) * 0.18);
+                    return;
+                }
+
                 let dir = e.getData("sweepDir") || 1;
                 const margin = 38;
 
@@ -579,22 +689,33 @@ export class PlayScene extends Phaser.Scene {
                     e.setData("sweepTurns", (e.getData("sweepTurns") || 0) + 1);
                 }
 
-                if (e.y < 75) {
+                if (e.getData("retreatFired") || (t >= retreatAt && e.y >= H * 0.55)) {
+                    // Keep recording the leader's escape path for the formation.
+                    this.fireBeforeRetreat(e);
+                    e.body.velocity.x = dir * 80;
+                    e.body.velocity.y = -205 * difficulty;
+                } else if (e.y < 75) {
                     // Enter the playfield before beginning the horizontal pass.
                     e.body.velocity.x = dir * 45;
                     e.body.velocity.y = 115 * difficulty;
-                } else if (t < 6.5) {
+                } else {
                     // Persistent edge-to-edge sweep with a restrained weave.
                     e.body.velocity.x = dir * 125 + Math.sin(t * 4.2) * 24;
                     e.body.velocity.y = 28 * difficulty + Math.cos(t * 2.4) * 14;
-                } else {
-                    // Retreat only after completing a readable screen pass.
-                    e.body.velocity.x = dir * 80;
-                    e.body.velocity.y = -205 * difficulty;
+                }
+
+                if (chain) {
+                    const moved = Phaser.Math.Distance.Between(chain.lastX, chain.lastY, e.x, e.y);
+                    if (moved >= 7) {
+                        chain.path.unshift({ x: e.x, y: e.y });
+                        chain.path.length = Math.min(chain.path.length, 180);
+                        chain.lastX = e.x;
+                        chain.lastY = e.y;
+                    }
                 }
             } else if (kind === "torkan") {
                 e.body.velocity.x = clamp((this.player.x - e.x) * 1.3, -145, 145);
-                e.body.velocity.y = t < 1.35 ? 235 * difficulty : -260 * difficulty;
+                e.body.velocity.y = 235 * difficulty;
                 if (!e.getData("fired") && e.y > 105) {
                     this.enemyFireAtPlayer(e);
                     e.setData("fired", true);
@@ -619,37 +740,28 @@ export class PlayScene extends Phaser.Scene {
                 if (t < 1.7) {
                     e.body.velocity.x = clamp((this.player.x - e.x) * 0.9, -115, 115);
                     e.body.velocity.y = 150 * difficulty;
-                } else if (t < 3.1) {
+                } else {
                     e.body.velocity.x = Math.sin(t * 5) * 70;
                     e.body.velocity.y = 18;
                     this.fireOnCooldown(e, dt, 0.58 / difficulty, 1);
-                } else {
-                    e.body.velocity.x = e.x < W / 2 ? -125 : 125;
-                    e.body.velocity.y = -235 * difficulty;
                 }
             } else if (kind === "jara") {
                 if (t < 1.5) {
                     e.body.velocity.x = Math.sin(t * 3.2) * 55;
                     e.body.velocity.y = 125 * difficulty;
-                } else if (t < 3.8) {
+                } else {
                     e.body.velocity.x = Math.sin(t * 2.7) * 105;
                     e.body.velocity.y = 26;
                     this.fireOnCooldown(e, dt, 0.82 / difficulty, 3, 0.12);
-                } else {
-                    e.body.velocity.x = e.getData("sweepDir") * 105;
-                    e.body.velocity.y = -210 * difficulty;
                 }
             } else if (kind === "terrazi") {
                 if (t < 1.25) {
                     e.body.velocity.x = clamp((this.player.x - e.x) * 1.8, -190, 190);
                     e.body.velocity.y = 245 * difficulty;
-                } else if (t < 2.35) {
+                } else {
                     e.body.velocity.x = clamp((this.player.x - e.x) * 0.75, -90, 90);
                     e.body.velocity.y = 8;
                     this.fireOnCooldown(e, dt, 0.30 / difficulty, 1);
-                } else {
-                    e.body.velocity.x = e.x < W / 2 ? -175 : 175;
-                    e.body.velocity.y = -305 * difficulty;
                 }
             }
 
@@ -664,22 +776,42 @@ export class PlayScene extends Phaser.Scene {
         });
     }
 
+    updateRoadTank(tank, dt) {
+        const site = tank.getData("roadSite");
+        const position = tank.getData("roadPosition");
+        let index = tank.getData("roadIndex");
+        let direction = tank.getData("roadDirection");
+        let remaining = 17 * dt; // Image pixels per second (34 screen pixels).
+        while (remaining > 0) {
+            const [x, y] = site.path[index];
+            const dx = x - position.x, dy = y - position.y;
+            const distance = Math.hypot(dx, dy);
+            if (distance > 0) {
+                const step = Math.min(remaining, distance);
+                position.x += dx / distance * step;
+                position.y += dy / distance * step;
+                tank.setRotation(Math.atan2(dy, dx) + Math.PI / 2);
+                remaining -= step;
+                if (step < distance) break;
+            }
+            if (index + direction < 0 || index + direction >= site.path.length) {
+                // The road centerline ends at forest, water, or the map edge.
+                direction *= -1;
+            }
+            index += direction;
+        }
+        tank.setData("roadIndex", index);
+        tank.setData("roadDirection", direction);
+        tank.setPosition(W / 2 - TERRAIN_W * TERRAIN_SCALE / 2 + position.x * TERRAIN_SCALE,
+            this.terrainSegments[site.segment].y + position.y * TERRAIN_SCALE);
+    }
+
     updateGroundTargets(dt) {
         this.groundTargets.children.iterate((g) => {
             if (!g || !g.active) return;
 
-            g.y += this.scrollSpeed * dt;
-            if (g.getData("kind") === "grabda") {
-                let dir = g.getData("moveDir") || 1;
-                const probeX = g.x + dir * 30;
-                if (probeX < 28 || probeX > W - 28 || !this.isRoadSite(probeX, g.y, 24)) {
-                    dir *= -1;
-                    g.setData("moveDir", dir);
-                }
-                const nextX = g.x + dir * 34 * dt;
-                if (this.isRoadSite(nextX, g.y, 24)) g.x = nextX;
-                g.setFlipX(dir < 0);
-            }
+            g.y += this.groundScrollDelta;
+            if (g.getData("kind") === "grabda") this.updateRoadTank(g, dt);
 
             if (g.getData("hidden") && Math.abs(g.y - this.player.y) < 120) {
                 g.setData("hidden", false);
@@ -690,7 +822,7 @@ export class PlayScene extends Phaser.Scene {
             if (cd <= 0) {
                 g.setData("fireCD", 0.9 + this.rng.frac() * 1.4);
 
-                if (!g.getData("hidden")) {
+                if (g.getData("canFire") && !g.getData("hidden") && g.y > 10 && g.y < H - 20) {
                     const kind = g.getData("kind");
                     const r = this.rng.frac();
 
@@ -707,7 +839,7 @@ export class PlayScene extends Phaser.Scene {
 
         this.powerups.children.iterate((p) => {
             if (!p || !p.active) return;
-            p.y += this.scrollSpeed * dt;
+            p.y += this.groundScrollDelta;
             const t = (p.getData("t") || 0) + dt;
             p.setData("t", t);
             p.x += Math.sin(t * 3.5) * 0.7;
@@ -716,7 +848,7 @@ export class PlayScene extends Phaser.Scene {
 
         this.craters.children.iterate((crater) => {
             if (!crater?.active) return;
-            crater.y += this.scrollSpeed * dt;
+            crater.y += this.groundScrollDelta;
         });
 
         this.bombs.children.iterate((b) => {
@@ -731,14 +863,26 @@ export class PlayScene extends Phaser.Scene {
                 lerp(b.getData("startX"), b.getData("targetX"), p),
                 lerp(b.getData("startY"), b.getData("targetY"), p)
             );
-            b.setScale(clamp(1.0 - p * 0.45, 0.55, 1.0));
+            const bombScale = clamp(2.0 - p * 0.9, 1.1, 2.0);
+            b.setScale(bombScale);
+            b.body.setSize(b.width * bombScale, b.height * bombScale, true);
 
             if (ttl <= 0) {
-                this.explodeBomb(b.x, b.y, this.bombRadius);
-                b.setActive(false).setVisible(false);
-                b.body.enable = false;
+                this.detonateBomb(b);
             }
         });
+    }
+
+    fireBeforeRetreat(enemy) {
+        if (enemy.getData("retreatFired")) return;
+        this.enemyFireAtPlayer(enemy);
+        enemy.setData("retreatFired", true);
+    }
+
+    launchEnemyBullet(bullet, angle) {
+        // The bullet artwork points up; Phaser angles start at the right.
+        bullet.setRotation(angle + Math.PI / 2);
+        bullet.setVelocity(Math.cos(angle) * BULLET_SPEED, Math.sin(angle) * BULLET_SPEED);
     }
 
     enemyFireAtPlayer(enemy) {
@@ -746,10 +890,11 @@ export class PlayScene extends Phaser.Scene {
         if (!bullet) return;
         bullet.setActive(true).setVisible(true);
         bullet.body.enable = true;
+        bullet.setScale(2);
+        bullet.body.setSize(bullet.width * 2, bullet.height * 2, true);
 
         const ang = Phaser.Math.Angle.Between(enemy.x, enemy.y, this.player.x, this.player.y);
-        const spd = 210 + this.distance * 0.02;
-        bullet.setVelocity(Math.cos(ang) * spd, Math.sin(ang) * spd);
+        this.launchEnemyBullet(bullet, ang);
     }
 
     fireOnCooldown(enemy, dt, cooldown, count = 1, spread = 0) {
@@ -761,29 +906,32 @@ export class PlayScene extends Phaser.Scene {
 
         enemy.setData("fireCD", cooldown + this.rng.frac() * 0.12);
         const aim = Phaser.Math.Angle.Between(enemy.x, enemy.y, this.player.x, this.player.y);
-        const speed = 215 + this.distance * 0.02;
         for (let i = 0; i < count; i++) {
             const bullet = this.enemyBullets.get(enemy.x, enemy.y + 10, "enemyBullet");
             if (!bullet) continue;
             bullet.setActive(true).setVisible(true);
             bullet.body.enable = true;
+            bullet.setScale(2);
+            bullet.body.setSize(bullet.width * 2, bullet.height * 2, true);
             const angle = aim + (i - (count - 1) / 2) * spread;
-            bullet.setVelocity(Math.cos(angle) * speed, Math.sin(angle) * speed);
+            this.launchEnemyBullet(bullet, angle);
         }
     }
 
     groundFire(g, accuracy = 0.75) {
+        if (!g.active || !g.getData("canFire")) return;
         const bullet = this.enemyBullets.get(g.x, g.y - 8, "enemyBullet");
         if (!bullet) return;
         bullet.setActive(true).setVisible(true);
         bullet.body.enable = true;
+        bullet.setScale(2);
+        bullet.body.setSize(bullet.width * 2, bullet.height * 2, true);
 
         const ang = Phaser.Math.Angle.Between(g.x, g.y, this.player.x, this.player.y);
         const spread = (1 - accuracy) * 0.35;
         const a = ang + this.rng.realInRange(-spread, spread);
 
-        const spd = 185 + this.distance * 0.015;
-        bullet.setVelocity(Math.cos(a) * spd * 0.75, Math.sin(a) * spd * 0.75);
+        this.launchEnemyBullet(bullet, a);
     }
 
     groundBurst(g, shots = 3, gap = 0.06) {
@@ -865,7 +1013,9 @@ export class PlayScene extends Phaser.Scene {
             if (!b) continue;
             b.setActive(true).setVisible(true);
             b.body.enable = true;
-            b.setVelocity(Math.cos(a) * spd, Math.sin(a) * spd);
+            b.setScale(2);
+            b.body.setSize(b.width * 2, b.height * 2, true);
+            this.launchEnemyBullet(b, a);
         }
     }
 
@@ -877,7 +1027,9 @@ export class PlayScene extends Phaser.Scene {
             if (!b) continue;
             b.setActive(true).setVisible(true);
             b.body.enable = true;
-            b.setVelocity(Math.cos(a) * spd, Math.sin(a) * spd);
+            b.setScale(2);
+            b.body.setSize(b.width * 2, b.height * 2, true);
+            this.launchEnemyBullet(b, a);
         }
     }
 
@@ -897,20 +1049,16 @@ export class PlayScene extends Phaser.Scene {
     }
 
     killBoss() {
+        if (!this.boss || this.boss.getData("defeated")) return;
         this.boss.setData("defeated", true);
         this.addScore(15000);
         this.camera.shake(260, 0.008);
         this.flash(0.25);
         this.safePlay("airHit");
 
-        for (let i = 0; i < 10; i++) {
-            this.time.delayedCall(i * 80, () => this.spawnEnemyExplosion(
-                this.boss.x + this.rng.between(-50, 50),
-                this.boss.y + this.rng.between(-30, 30)
-            ));
-        }
+        this.spawnAndorDestruction(this.boss);
 
-        this.time.delayedCall(900, () => {
+        this.time.delayedCall(1800, () => {
             this.bossWeakPoints.clear(true, true);
             this.boss.destroy();
             this.boss = null;
@@ -918,12 +1066,81 @@ export class PlayScene extends Phaser.Scene {
 
             // loop
             this.distance = 0;
+            this.terrainTravel = 0;
+            this.groundScrollDelta = 0;
+            this.terrainSegments.forEach((segment, index) => {
+                segment.y = H - TERRAIN_SEGMENT_HEIGHT - index * TERRAIN_SEGMENT_HEIGHT;
+            });
+            this.groundTargets.clear(true, true);
+            this.craters.clear(true, true);
             this.nextScriptIndex = 0;
+            this.nextGroundIndex = 0;
             this.scrollSpeed = 180;
             this.weaponLevel = 3;
             this.radarCharges = Math.min(5, this.radarCharges + 2);
             this.flash(0.12);
         });
+    }
+
+    spawnAndorDestruction(boss) {
+        const cx = boss.x, cy = boss.y;
+        const radiusX = boss.displayWidth * 0.42;
+        const radiusY = boss.displayHeight * 0.42;
+        const colors = [0xffffff, 0xfff4c2, 0xffe45c, 0xffb52e, 0xff751f, 0xff3820];
+        if (!this.textures.exists("andorGlow")) {
+            const texture = this.textures.createCanvas("andorGlow", 32, 32);
+            const context = texture.getContext();
+            const glow = context.createRadialGradient(16, 16, 0, 16, 16, 16);
+            glow.addColorStop(0, "rgba(255,255,255,1)");
+            glow.addColorStop(0.2, "rgba(255,255,255,0.9)");
+            glow.addColorStop(0.5, "rgba(255,255,255,0.3)");
+            glow.addColorStop(1, "rgba(255,255,255,0)");
+            context.fillStyle = glow;
+            context.fillRect(0, 0, 32, 32);
+            texture.refresh();
+        }
+        const sparks = this.add.particles(0, 0, "andorGlow", {
+            emitting: false,
+            lifespan: { min: 1000, max: 2400 },
+            speed: { min: 45, max: 230 },
+            angle: { min: 0, max: 360 },
+            scale: { start: 0.8, end: 0 },
+            alpha: { start: 0.9, end: 0 },
+            tint: colors,
+            blendMode: "ADD",
+            maxParticles: 1000
+        }).setDepth(1001);
+        sparks.explode(180, cx, cy);
+        // Last burst at 1386ms + 2400ms maximum particle life.
+        this.time.delayedCall(4000, () => sparks.destroy());
+        for (let i = 0; i < 100; i++) {
+            const angle = this.rng.realInRange(0, Math.PI * 2);
+            // Squaring the radius concentrates origins around the core.
+            const radius = Math.pow(this.rng.frac(), 2);
+            const x = cx + Math.cos(angle) * radiusX * radius;
+            const y = cy + Math.sin(angle) * radiusY * radius;
+            const distance = this.rng.realInRange(90, 330);
+            const tint = colors[this.rng.between(0, colors.length - 1)];
+            this.time.delayedCall(i * 14, () => {
+                sparks.explode(8, x, y);
+                const key = `andorChild${i % 5}`;
+                const debris = this.add.sprite(x, y, key, 1)
+                    .setDepth(1000).setScale(this.rng.realInRange(1.2, 2.5))
+                    .setTintFill(tint).setRotation(angle);
+                debris.play({ key: `${key}Explode`, startFrame: 1 });
+                debris.anims.timeScale = 0.5;
+                this.tweens.add({
+                    targets: debris,
+                    x: x + Math.cos(angle) * distance,
+                    y: y + Math.sin(angle) * distance,
+                    rotation: angle + this.rng.realInRange(-5, 5),
+                    alpha: 0,
+                    duration: this.rng.between(1300, 2600),
+                    ease: "Cubic.Out",
+                    onComplete: () => debris.destroy()
+                });
+            });
+        }
     }
 
     // ---------- collisions / scoring ----------
@@ -940,13 +1157,6 @@ export class PlayScene extends Phaser.Scene {
         this.damageAir(enemy, 1);
     }
 
-    onBombTouchesGround(bomb, ground) {
-        if (!bomb.active || !ground.active) return;
-        this.explodeBomb(bomb.x, bomb.y, this.bombRadius);
-        bomb.setActive(false).setVisible(false);
-        bomb.body.enable = false;
-    }
-
     damageAir(enemy, dmg) {
         enemy.setData("hp", (enemy.getData("hp") || 1) - dmg);
         if (enemy.getData("hp") <= 0) {
@@ -958,10 +1168,15 @@ export class PlayScene extends Phaser.Scene {
     }
 
     damageGround(g, dmg) {
+        if (!g?.active || g.getData("destroyed")) return;
         g.setData("hp", (g.getData("hp") || 1) - dmg);
         if (g.getData("hp") <= 0) {
+            // Physics overlap callbacks can queue more than once in a frame.
+            // Mark destruction before creating effects so this remains one-shot.
+            g.setData("destroyed", true);
             this.safePlay("groundHit");
             this.spawnCrater(g.x, g.y);
+            this.spawnEnemyCollapse(g.x, g.y);
             this.killEntity(g);
             this.addScore(this.applyCombo(170));
             if (this.rng.frac() < 0.09) this.spawnPowerup();
@@ -969,6 +1184,8 @@ export class PlayScene extends Phaser.Scene {
     }
 
     killEntity(e) {
+        const chain = e.getData("chain");
+        if (chain?.leader === e) chain.leader = null;
         this.spawnEnemyExplosion(e.x, e.y);
         e.setActive(false).setVisible(false);
         e.body.enable = false;
@@ -987,6 +1204,8 @@ export class PlayScene extends Phaser.Scene {
     }
 
     loseLife() {
+        if (GOD_MODE) return;
+
         this.lives -= 1;
         this.combo = 0;
         this.comboTimer = 0;
@@ -1018,8 +1237,10 @@ export class PlayScene extends Phaser.Scene {
 
     gameOver() {
         this.isPaused = true;
+        this.startMusic?.stop();
+        this.gameMusic?.stop();
         this.add.bitmapText(W / 2, H / 2, "xeviousFont",
-            `GAME OVER\nSCORE ${this.score}\n\nPress R to restart`, 18)
+            `GAME OVER\n\nSCORE ${this.score}\n\nPress R to restart`, 18)
             .setLetterSpacing(-3).setTint(0xffffff).setCenterAlign()
             .setOrigin(0.5).setDepth(5000);
     }
@@ -1035,7 +1256,6 @@ export class PlayScene extends Phaser.Scene {
         else if (type === "speed") { this.scrollSpeed = Math.min(260, this.scrollSpeed + 12); this.addScore(500); }
         else if (type === "radar") { this.radarCharges = Math.min(5, this.radarCharges + 1); this.addScore(650); }
 
-        this.safePlay("credit");
         this.flash(0.10);
     }
 
@@ -1047,6 +1267,14 @@ export class PlayScene extends Phaser.Scene {
 
     addScore(v) { this.score += v; }
 
+    spawnEnemyCollapse(x, y) {
+        const keys = ["enemyCollapse", "enemyCollapse0", "enemyCollapse3"];
+        const key = keys[this.rng.between(0, keys.length - 1)];
+        const debris = this.add.sprite(x, y, key).setDepth(901);
+        debris.play(`${key}Anim`);
+        debris.once("animationcomplete", () => debris.destroy());
+    }
+
     spawnEnemyExplosion(x, y) {
         const s = this.add.sprite(x, y, "enemyExplosion").setDepth(900);
         s.play("enemyExplosionAnim");
@@ -1056,8 +1284,11 @@ export class PlayScene extends Phaser.Scene {
     spawnCrater(x, y) {
         const crater = this.craters.get(x, y, "crater");
         if (!crater) return;
+        this.tweens.killTweensOf(crater);
+        crater.anims.stop();
         crater.setTexture("crater").setActive(true).setVisible(true)
             .setDepth(85).setAlpha(1).setScale(0.65);
+        crater.play("craterAnim");
         this.tweens.add({
             targets: crater,
             scale: 1.2,
@@ -1104,28 +1335,39 @@ function makeStageScript() {
     const s = [];
     let d = 18;
 
+    const addAirSeries = (pattern, counts, waveSpacing = 48, recovery = 28) => {
+        for (const count of counts) {
+            const waveCount = pattern === "blockade" ? 12 : Math.max(5, count);
+            s.push({ at: d, type: "airWave", pattern, count: waveCount });
+            d += waveSpacing;
+        }
+        d += recovery;
+    };
+
     s.push({ at: d, type: "groundRow", count: 3, hiddenChance: 0 }); d += 22;
-    s.push({ at: d, type: "airWave", pattern: "zig", count: 3 }); d += 45;
-    s.push({ at: d, type: "groundRow", count: 2, hiddenChance: 0 }); d += 55;
 
-    s.push({ at: d, type: "airWave", pattern: "dive", count: 3 }); d += 65;
-    s.push({ at: d, type: "airWave", pattern: "kapiStrike", count: 3 }); d += 60;
-    s.push({ at: d, type: "airWave", pattern: "sweep", count: 2 }); d += 70;
-    s.push({ at: d, type: "airWave", pattern: "jaraStrike", count: 2 }); d += 65;
-    s.push({ at: d, type: "airWave", pattern: "materialize", count: 2 }); d += 75;
-    s.push({ at: d, type: "airWave", pattern: "terraziStrike", count: 2 }); d += 65;
-    s.push({ at: d, type: "airWave", pattern: "blockade", count: 2 }); d += 80;
+    // Each enemy type gets its own escalating attack series.
+    addAirSeries("zig", [5, 5, 5], 46, 24);                 // Toroids
+    s.push({ at: d, type: "groundRow", count: 2, hiddenChance: 0 }); d += 38;
+    addAirSeries("dive", [2, 3], 48, 26);                  // Torkans
+    addAirSeries("kapiStrike", [2, 3], 46, 24);            // Kapi
+    s.push({ at: d, type: "powerup" }); d += 34;
+    s.push({ at: d, type: "groundRow", count: 3, hiddenChance: 0 }); d += 38;
+    addAirSeries("sweep", [2, 2, 3], 48, 26);              // Zoshi
+    addAirSeries("jaraStrike", [2, 3], 48, 26);            // Jara
+    s.push({ at: d, type: "radarCharge", amount: 1 }); d += 30;
+    addAirSeries("materialize", [2, 3, 4], 42, 24);        // Zakato
+    s.push({ at: d, type: "groundRow", count: 3, hiddenChance: 0 }); d += 36;
+    addAirSeries("terraziStrike", [2, 3], 46, 24);         // Terrazi
+    addAirSeries("blockade", [12, 12], 58, 20);            // 12-board Bacura minefields
 
-    s.push({ at: d, type: "airWave", pattern: "formation", count: 5 }); d += 80;
-    s.push({ at: d, type: "powerup" }); d += 80;
-
-    for (let i = 0; i < 10; i++) {
-        const patterns = ["zig", "kapiStrike", "dive", "jaraStrike", "sweep", "terraziStrike", "materialize", "blockade"];
-        s.push({ at: d, type: "airWave", pattern: patterns[i % patterns.length], count: 2 + (i % 4) }); d += 55;
-        s.push({ at: d, type: "groundRow", count: 2 + (i % 3 === 0 ? 1 : 0), hiddenChance: 0 }); d += 55;
-        if (i === 4) s.push({ at: d, type: "radarCharge", amount: 1 });
+    // Fill any remaining course with mixed same-type two-wave attack sets.
+    const lateSeries = ["zig", "kapiStrike", "dive", "jaraStrike", "sweep", "terraziStrike"];
+    for (const pattern of lateSeries) {
+        addAirSeries(pattern, [3, 4], 44, 18);
+        s.push({ at: d, type: "groundRow", count: 2, hiddenChance: 0 });
+        d += 30;
     }
 
     return s;
 }
-
