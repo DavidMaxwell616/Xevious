@@ -37,6 +37,18 @@ export class BootScene extends Phaser.Scene {
             }
         );
         this.load.image("barra", "assets/images/enemy_barra.png");
+        this.load.spritesheet("domogram", "assets/images/enemy_domogram.png", {
+            frameWidth: 18, frameHeight: 20
+        });
+        this.load.spritesheet("bozaLogram", "assets/images/enemy_boza_logram.png", {
+            frameWidth: 41, frameHeight: 41, spacing: 2
+        });
+        this.load.spritesheet("garuBara", "assets/images/enemy_garu_bara.png", {
+            frameWidth: 36, frameHeight: 36
+        });
+        this.load.spritesheet("garuDerotaStatic", "assets/images/enemy_garu_darota.png", {
+            frameWidth: 36, frameHeight: 36, spacing: 3
+        });
         this.load.spritesheet("derota", "assets/images/enemy_derota.png",
             {
                 frameWidth: 30,
@@ -85,7 +97,9 @@ export class BootScene extends Phaser.Scene {
         }
 
         this.load.image("shot", "assets/images/shot.png");
-        this.load.image("enemyBullet", "assets/images/enemyBullet.png");
+        this.load.spritesheet("enemyBullet", "assets/images/enemyBullet.png", {
+            frameWidth: 4, frameHeight: 4, spacing: 2
+        });
         this.load.image("powerup", "assets/images/powerup.png");
         this.load.spritesheet("crater", "assets/images/crater.png", {
             frameWidth: 24,
@@ -153,6 +167,20 @@ export class BootScene extends Phaser.Scene {
             spacing: { x: 0, y: 0 }
         }));
 
+
+        this.anims.create({
+            key: "boza_logram_idle",
+            frames: this.anims.generateFrameNumbers("bozaLogram", { start: 0, end: 3 }),
+            frameRate: 6,
+            repeat: -1
+        });
+
+        this.anims.create({
+            key: "domogram_idle",
+            frames: this.anims.generateFrameNumbers("domogram", { start: 0, end: 3 }),
+            frameRate: 8,
+            repeat: -1
+        });
 
         // Explosion and crater animations.
         for (const [key, end] of [["enemyCollapse", 3], ["enemyCollapse0", 9], ["enemyCollapse3", 11]]) {

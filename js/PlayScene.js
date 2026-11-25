@@ -79,6 +79,7 @@ export class PlayScene extends Phaser.Scene {
         this.bombRadius = 56;
         this.radarCharges = 2;
         this.waveNumber = 0;
+        this.bacuraWaveNumber = 0;
 
         // cooldowns
         this.playerInvuln = 0;
@@ -343,7 +344,7 @@ export class PlayScene extends Phaser.Scene {
             const d = Phaser.Math.Distance.Between(x, y, t.x, t.y);
             if (d <= radius) hit.push(t);
         });
-        hit.forEach(t => this.damageGround(t, 99));
+        hit.forEach(t => this.damageGround(t, t.getData("twoHit") ? 1 : 99));
 
     }
 
@@ -429,8 +430,8 @@ export class PlayScene extends Phaser.Scene {
 
         if (kind === "bacura") {
             const lanes = [48, 112, 176, 240, 304, 368, 432];
-            const boardsPerRow = 6;
-            const rows = 4;
+            const boardsPerRow = 3;
+            const rows = 2 + this.bacuraWaveNumber++;
             for (let row = 0; row < rows; row++) {
                 const available = [...lanes];
                 Phaser.Utils.Array.Shuffle(available);
@@ -447,7 +448,7 @@ export class PlayScene extends Phaser.Scene {
         for (let i = 0; i < count; i++) {
             const x = 55 + this.rng.frac() * (W - 110);
             const spacing = 42;
-            const y = kind === "zakato" ? 72 + i * 52 : -50 - i * spacing;
+            const y = kind === "zakato" ? -8 + i * 52 : -50 - i * spacing;
             this.spawnAirEnemy(kind, x, y, pattern);
         }
     }
@@ -529,12 +530,14 @@ export class PlayScene extends Phaser.Scene {
     }
 
     spawnGroundTarget(kind, x, y, site) {
-        const hp = { logram: 2, zolba: 2, barra: 1, derota: 3, grabda: 2 };
+        const hp = { logram: 2, zolba: 2, barra: 1, derota: 3, grabda: 2, garuBara: 2, garuDerotaStatic: 2, bozaLogram: 1, domogram: 1 };
+        const twoHit = kind === "garuBara" || kind === "garuDerotaStatic";
         const g = this.groundTargets.get(x, y, kind);
         if (!g) return false;
         g.anims.stop();
         g.setTexture(kind).setActive(true).setVisible(true);
-        g.setScale(kind === "grabda" ? 2 : 1.2);
+        if (twoHit) g.setFrame(0);
+        g.setScale(kind === "grabda" ? 2 : kind === "bozaLogram" ? 1.7 : twoHit ? 2 : kind === "domogram" ? 2.4 : 1.2);
         g.body.enable = true;
         g.body.setSize(g.width, g.height, true);
         g.setVelocity(0, 0).setFlipX(false).setDepth(90).setAlpha(1);
@@ -557,11 +560,12 @@ export class PlayScene extends Phaser.Scene {
             g.setData("roadDirection", 1);
         }
         g.setData("hp", hp[kind]);
+        g.setData("twoHit", twoHit);
         g.setData("destroyed", false);
         g.setData("hidden", false);
         g.setData("fireCD", 0.7 + this.rng.frac() * 1.3);
         g.setData("moveDir", this.rng.frac() < 0.5 ? -1 : 1);
-        const animations = { logram: "logram_idle", zolba: "zolba_idle", derota: "derota_idle", grabda: "grabda_tread" };
+        const animations = { logram: "logram_idle", zolba: "zolba_idle", derota: "derota_idle", grabda: "grabda_tread", bozaLogram: "boza_logram_idle", domogram: "domogram_idle" };
         g.setData("canFire", Boolean(animations[kind]));
         if (animations[kind]) g.anims.play(animations[kind], true);
         return true;
@@ -826,7 +830,9 @@ export class PlayScene extends Phaser.Scene {
                     const kind = g.getData("kind");
                     const r = this.rng.frac();
 
-                    if (kind === "logram" || kind === "zolba" || kind === "derota" || kind === "sol" || kind === "grabda") {
+                    if (kind === "bozaLogram") {
+                        this.bozaLogramFire(g);
+                    } else if (kind === "logram" || kind === "zolba" || kind === "derota" || kind === "sol" || kind === "grabda" || kind === "domogram") {
                         if (r < 0.60) this.groundFire(g, 1.0);
                     } else if (kind === "garuDerota") {
                         if (r < 0.45) this.groundBurst(g, 3, 0.06);
@@ -880,6 +886,8 @@ export class PlayScene extends Phaser.Scene {
     }
 
     launchEnemyBullet(bullet, angle) {
+        // Select again on every shot, including reused pooled bullets.
+        bullet.setFrame(this.rng.between(0, 3));
         // The bullet artwork points up; Phaser angles start at the right.
         bullet.setRotation(angle + Math.PI / 2);
         bullet.setVelocity(Math.cos(angle) * BULLET_SPEED, Math.sin(angle) * BULLET_SPEED);
@@ -914,6 +922,23 @@ export class PlayScene extends Phaser.Scene {
             bullet.setScale(2);
             bullet.body.setSize(bullet.width * 2, bullet.height * 2, true);
             const angle = aim + (i - (count - 1) / 2) * spread;
+            this.launchEnemyBullet(bullet, angle);
+        }
+    }
+
+    bozaLogramFire(g) {
+        if (!g.active || !g.getData("canFire")) return;
+        for (const [dx, dy, angle] of [
+            [0, -1, -Math.PI / 2], [1, 0, 0],
+            [0, 1, Math.PI / 2], [-1, 0, Math.PI]
+        ]) {
+            const bullet = this.enemyBullets.get(
+                g.x + dx * g.displayWidth / 2,
+                g.y + dy * g.displayHeight / 2, "enemyBullet");
+            if (!bullet) continue;
+            bullet.setActive(true).setVisible(true).setScale(2);
+            bullet.body.enable = true;
+            bullet.body.setSize(bullet.width * 2, bullet.height * 2, true);
             this.launchEnemyBullet(bullet, angle);
         }
     }
@@ -1170,6 +1195,11 @@ export class PlayScene extends Phaser.Scene {
     damageGround(g, dmg) {
         if (!g?.active || g.getData("destroyed")) return;
         g.setData("hp", (g.getData("hp") || 1) - dmg);
+        if (g.getData("twoHit") && g.getData("hp") > 0) {
+            g.setFrame(1);
+            this.safePlay("groundHit");
+            this.spawnEnemyExplosion(g.x, g.y);
+        }
         if (g.getData("hp") <= 0) {
             // Physics overlap callbacks can queue more than once in a frame.
             // Mark destruction before creating effects so this remains one-shot.

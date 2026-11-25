@@ -4,28 +4,28 @@ export const GROUND_MAP = [
     "segment": 0,
     "x": 162,
     "y": 2284,
-    "kind": "derota",
+    "kind": "garuBara",
     "terrain": "grass"
   },
   {
     "segment": 0,
     "x": 62,
     "y": 2048,
-    "kind": "barra",
+    "kind": "bozaLogram",
     "terrain": "grass"
   },
   {
     "segment": 0,
     "x": 62,
     "y": 1840,
-    "kind": "zolba",
+    "kind": "garuDerotaStatic",
     "terrain": "grass"
   },
   {
     "segment": 0,
     "x": 142,
     "y": 1468,
-    "kind": "logram",
+    "kind": "domogram",
     "terrain": "grass"
   },
   {
@@ -485,21 +485,21 @@ export const GROUND_MAP = [
     "segment": 0,
     "x": 178,
     "y": 1288,
-    "kind": "barra",
+    "kind": "garuBara",
     "terrain": "grass"
   },
   {
     "segment": 0,
     "x": 18,
     "y": 904,
-    "kind": "zolba",
+    "kind": "bozaLogram",
     "terrain": "grass"
   },
   {
     "segment": 0,
     "x": 174,
     "y": 636,
-    "kind": "logram",
+    "kind": "garuDerotaStatic",
     "terrain": "grass"
   },
   {
@@ -1579,7 +1579,7 @@ export const GROUND_MAP = [
     "segment": 1,
     "x": 230,
     "y": 2056,
-    "kind": "logram",
+    "kind": "garuBara",
     "terrain": "grass"
   },
   {
@@ -2459,7 +2459,7 @@ export const GROUND_MAP = [
     "segment": 1,
     "x": 112,
     "y": 1865,
-    "kind": "logram",
+    "kind": "bozaLogram",
     "terrain": "dirt",
     "reservedClearing": true
   },
@@ -2467,7 +2467,7 @@ export const GROUND_MAP = [
     "segment": 1,
     "x": 143,
     "y": 1770,
-    "kind": "logram",
+    "kind": "garuDerotaStatic",
     "terrain": "dirt",
     "reservedClearing": true
   },
@@ -2475,7 +2475,7 @@ export const GROUND_MAP = [
     "segment": 1,
     "x": 159,
     "y": 1689,
-    "kind": "logram",
+    "kind": "domogram",
     "terrain": "dirt",
     "reservedClearing": true
   },
@@ -3077,7 +3077,7 @@ export const GROUND_MAP = [
     "segment": 1,
     "x": 98,
     "y": 804,
-    "kind": "derota",
+    "kind": "garuBara",
     "terrain": "grass"
   },
   {
@@ -3589,7 +3589,7 @@ export const GROUND_MAP = [
     "segment": 2,
     "x": 18,
     "y": 2296,
-    "kind": "derota",
+    "kind": "bozaLogram",
     "terrain": "grass"
   },
   {
@@ -4006,7 +4006,7 @@ export const GROUND_MAP = [
     "segment": 2,
     "x": 38,
     "y": 1028,
-    "kind": "barra",
+    "kind": "garuDerotaStatic",
     "terrain": "dirt"
   },
   {
@@ -4498,49 +4498,49 @@ export const GROUND_MAP = [
     "segment": 3,
     "x": 94,
     "y": 2084,
-    "kind": "barra",
+    "kind": "garuBara",
     "terrain": "dirt"
   },
   {
     "segment": 3,
     "x": 18,
     "y": 1968,
-    "kind": "derota",
+    "kind": "bozaLogram",
     "terrain": "dirt"
   },
   {
     "segment": 3,
     "x": 58,
     "y": 1828,
-    "kind": "logram",
+    "kind": "garuDerotaStatic",
     "terrain": "dirt"
   },
   {
     "segment": 3,
     "x": 178,
     "y": 1660,
-    "kind": "zolba",
+    "kind": "domogram",
     "terrain": "dirt"
   },
   {
     "segment": 3,
     "x": 18,
     "y": 1492,
-    "kind": "logram",
+    "kind": "garuBara",
     "terrain": "dirt"
   },
   {
     "segment": 3,
     "x": 226,
     "y": 1404,
-    "kind": "barra",
+    "kind": "bozaLogram",
     "terrain": "grass"
   },
   {
     "segment": 3,
     "x": 62,
     "y": 1288,
-    "kind": "barra",
+    "kind": "garuDerotaStatic",
     "terrain": "dirt"
   },
   {
@@ -5976,28 +5976,28 @@ export const GROUND_MAP = [
     "segment": 3,
     "x": 70,
     "y": 956,
-    "kind": "logram",
+    "kind": "garuBara",
     "terrain": "dirt"
   },
   {
     "segment": 3,
     "x": 70,
     "y": 788,
-    "kind": "derota",
+    "kind": "bozaLogram",
     "terrain": "grass"
   },
   {
     "segment": 3,
     "x": 234,
     "y": 668,
-    "kind": "logram",
+    "kind": "garuDerotaStatic",
     "terrain": "grass"
   },
   {
     "segment": 3,
     "x": 234,
     "y": 572,
-    "kind": "zolba",
+    "kind": "domogram",
     "terrain": "grass"
   }
 ];
